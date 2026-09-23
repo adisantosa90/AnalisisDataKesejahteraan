@@ -1,0 +1,405 @@
+# 1. IMPORT LIBRARY YANG DIBUTUHKAN
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import classification_report, accuracy_score, precision_score, recall_score, f1_score
+from imblearn.over_sampling import SMOTE
+from sklearn.utils.class_weight import compute_class_weight
+from google.colab import files
+
+# Mengatur gaya visualisasi standar akademis
+sns.set_theme(style="whitegrid")
+plt.rcParams.update({'font.size': 12})
+
+# 2. UPLOAD DATASET KE GOOGLE COLAB
+print("Silakan unggah file 'Dataset Susenas 2024 BPS v.1.5.csv'")
+uploaded = files.upload()
+
+# Mendapatkan nama file yang diunggah
+file_name = list(uploaded.keys())[0]
+
+# Membaca dataset (mengantisipasi pemisah titik koma/semicolon)
+try:
+    df = pd.read_csv(file_name, sep=';')
+    # Validasi jika data ternyata menggunakan koma
+    if df.shape[1] == 1:
+        df = pd.read_csv(file_name, sep=',')
+except Exception as e:
+    print("Terjadi kesalahan saat membaca file:", e)
+
+print("\n[INFO] Dimensi dataset:", df.shape)
+df.head()
+
+# 3. PEMISAHAN FITUR (X) DAN TARGET (Y)
+# Diasumsikan kolom target bernama 'STATUS_KESEJATERAAN'
+X = df.drop('STATUS_KESEJATERAAN', axis=1)
+y = df['STATUS_KESEJATERAAN']
+
+# 4. STRATIFIED TRAIN-TEST SPLIT (80% Train, 20% Test)
+# stratify=y memastikan rasio kelas miskin/tidak miskin sama di data latih dan uji
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+# 5. PELATIHAN MODEL RANDOM FOREST
+# Menggunakan class_weight='balanced' untuk mengatasi imbalance data
+rf_model = RandomForestClassifier(
+    n_estimators=200,          # Jumlah pohon keputusan
+    class_weight='balanced',   # Penyeimbang otomatis untuk kelas minoritas
+    random_state=42,           # Memastikan hasil dapat direproduksi (reproducible)
+    max_depth=10,              # Mencegah overfitting berlebihan
+    min_samples_leaf=2
+)
+
+# Melatih model
+rf_model.fit(X_train, y_train)
+
+# Melakukan prediksi pada data uji
+y_pred = rf_model.predict(X_test)
+
+# 1. Menghitung bobot otomatis yang digunakan oleh class_weight='balanced'
+classes = np.unique(y_train)
+weights = compute_class_weight(class_weight='balanced', classes=classes, y=y_train)
+
+# 2. Membuat DataFrame untuk Tabel Ringkasan
+class_counts = y_train.value_counts().sort_index()
+
+df_balanced = pd.DataFrame({
+    'Jumlah Sampel': class_counts.values,
+    'Persentase (%)': (class_counts.values / len(y_train) * 100).round(2),
+    'Bobot Model (Multiplier)': weights.round(4)
+}, index=classes)
+df_balanced.index.name = 'STATUS_KESEJATERAAN'
+
+# 3. Menampilkan Tabel di Terminal / Notebook
+print("\n" + "="*65)
+print(" 📊 DISTRIBUSI DATA & PENALTI BOBOT (CLASS_WEIGHT='BALANCED')")
+print("="*65)
+print(df_balanced.to_markdown(tablefmt="grid"))
+print("="*65 + "\n")
+
+# 4. Visualisasi Grafik Twin-Axis (Bar untuk Sampel, Garis untuk Bobot)
+sns.set_theme(style="whitegrid")
+fig, ax1 = plt.subplots(figsize=(10, 6))
+
+# Axis 1: Bar Chart untuk Jumlah Sampel
+sns.barplot(
+    x=df_balanced.index,
+    y=df_balanced['Jumlah Sampel'],
+    hue=df_balanced.index,
+    legend=False,
+    palette=['#1D3557', '#E63946'],
+    edgecolor='black',
+    ax=ax1
+)
+
+ax1.set_title('Perbandingan Jumlah Sampel vs Bobot Kelas (Balanced)',
+              fontsize=14, fontweight='bold', pad=15)
+ax1.set_xlabel('Status Kesejahteraan', fontsize=12)
+ax1.set_ylabel('Jumlah Sampel Aktual', fontsize=12, color='#1D3557')
+ax1.tick_params(axis='y', labelcolor='#1D3557')
+
+# Menambahkan angka di atas bar chart
+for p in ax1.patches:
+    ax1.annotate(f'{int(p.get_height())}',
+                 (p.get_x() + p.get_width() / 2., p.get_height()),
+                 ha='center', va='bottom', fontsize=11, xytext=(0, 5),
+                 textcoords='offset points')
+
+# Axis 2: Line Chart untuk Bobot Model
+ax2 = ax1.twinx()
+sns.lineplot(x=df_balanced.index, y=df_balanced['Bobot Model (Multiplier)'],
+             color='#FCA311', marker='o', markersize=10, linewidth=3, ax=ax2)
+
+ax2.set_ylabel('Bobot Penalti Algoritma', fontsize=12, color='#FCA311')
+ax2.tick_params(axis='y', labelcolor='#FCA311')
+ax2.grid(False)
+
+plt.tight_layout()
+plt.show()
+
+# --- PENERAPAN SMOTE ---
+# Menggunakan SMOTE untuk membuat sampel sintetis pada kelas minoritas
+smote = SMOTE(random_state=42)
+X_train_smote, y_train_smote = smote.fit_resample(X_train, y_train)
+
+
+# --- TAMPILAN MENARIK: TABEL & GRAFIK PERBANDINGAN ---
+
+# 1. Membuat Tabel Ringkasan dengan Pandas
+dist_awal = y_train.value_counts().rename('Sebelum SMOTE')
+dist_smote = y_train_smote.value_counts().rename('Sesudah SMOTE')
+
+df_distribusi = pd.concat([dist_awal, dist_smote], axis=1)
+df_distribusi.index.name = 'Kelas Status'
+
+print("\n" + "="*50)
+print(" 📊 PERBANDINGAN DISTRIBUSI KELAS DATA LATIH")
+print("="*50)
+print(df_distribusi.to_markdown(tablefmt="grid"))
+print("="*50 + "\n")
+
+# 2. Visualisasi Grafik Bar (Matplotlib & Seaborn)
+sns.set_theme(style="whitegrid")
+plt.figure(figsize=(9, 5))
+
+# Plot data
+df_distribusi.plot(kind='bar', color=['#E63946', '#1D3557'], edgecolor='black', zorder=3)
+plt.title('Distribusi Kelas Sebelum vs Sesudah SMOTE', fontsize=14, fontweight='bold', pad=15)
+plt.xlabel('Status Kesejahteraan (Kelas Target)', fontsize=12)
+plt.ylabel('Jumlah Sampel', fontsize=12)
+plt.xticks(rotation=0)
+plt.legend(title='Kondisi Data Latih', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(axis='y', linestyle='--', alpha=0.7, zorder=0)
+
+# Menampilkan angka di atas bar
+for p in plt.gca().patches:
+    plt.gca().annotate(f'{int(p.get_height())}',
+                       (p.get_x() + p.get_width() / 2., p.get_height()),
+                       ha='center', va='bottom', fontsize=10, xytext=(0, 5),
+                       textcoords='offset points')
+
+plt.tight_layout()
+plt.show()
+
+
+# 5. PELATIHAN MODEL RANDOM FOREST
+# class_weight='balanced' DIHAPUS karena data latih sudah diseimbangkan oleh SMOTE
+rf_model_smote = RandomForestClassifier(
+    n_estimators=200,          # Jumlah pohon keputusan
+    random_state=42,           # Reproducible
+    max_depth=10,              # Mencegah overfitting
+    min_samples_leaf=2
+)
+
+# Melatih model MENGGUNAKAN data hasil SMOTE
+rf_model_smote.fit(X_train_smote, y_train_smote)
+
+# Melakukan prediksi pada data uji (X_test ASLI, tidak di-SMOTE)
+y_pred = rf_model_smote.predict(X_test)
+
+# ==========================================
+# 1. PREDIKSI DATA UJI (TEST DATA)
+# ==========================================
+# Asumsi model Anda bernama rf_model (untuk Balanced) dan rf_model_smote (untuk SMOTE)
+y_pred_balanced = rf_model.predict(X_test)
+y_pred_smote = rf_model_smote.predict(X_test)
+
+
+# ==========================================
+# 2. MENAMPILKAN CLASSIFICATION REPORT (TEKS)
+# ==========================================
+print("="*60)
+print(" 📊 CLASSIFICATION REPORT: RANDOM FOREST (BALANCED)")
+print("="*60)
+print(classification_report(y_test, y_pred_balanced))
+
+print("\n" + "="*60)
+print(" 📊 CLASSIFICATION REPORT: RANDOM FOREST (SMOTE)")
+print("="*60)
+print(classification_report(y_test, y_pred_smote))
+
+
+# ==========================================
+# 3. MENGHITUNG METRIK UNTUK GRAFIK (MACRO AVG)
+# ==========================================
+def hitung_metrik(y_true, y_pred):
+    return {
+        'Accuracy': accuracy_score(y_true, y_pred),
+        'Precision': precision_score(y_true, y_pred, average='macro'),
+        'Recall': recall_score(y_true, y_pred, average='macro'),
+        'F1-Score': f1_score(y_true, y_pred, average='macro')
+    }
+
+metrik_balanced = hitung_metrik(y_test, y_pred_balanced)
+metrik_smote = hitung_metrik(y_test, y_pred_smote)
+
+# Menyusun ke dalam DataFrame Pandas untuk tabel ringkasan
+df_metrics = pd.DataFrame({
+    'Metrik': ['Accuracy', 'Precision', 'Recall', 'F1-Score'],
+    'Balanced': [metrik_balanced['Accuracy'], metrik_balanced['Precision'], metrik_balanced['Recall'], metrik_balanced['F1-Score']],
+    'SMOTE': [metrik_smote['Accuracy'], metrik_smote['Precision'], metrik_smote['Recall'], metrik_smote['F1-Score']]
+})
+
+print("\n" + "="*50)
+print(" 📈 TABEL KOMPARASI METRIK EVALUASI")
+print("="*50)
+print(df_metrics.to_markdown(index=False, tablefmt="grid"))
+print("="*50 + "\n")
+
+
+# ==========================================
+# 4. VISUALISASI GRAFIK PERBANDINGAN
+# ==========================================
+# Mengubah format (melt) DataFrame agar mudah dibaca oleh Seaborn untuk Grouped Bar Chart
+df_melt = df_metrics.melt(id_vars='Metrik', var_name='Metode', value_name='Skor')
+
+sns.set_theme(style="whitegrid")
+plt.figure(figsize=(10, 6))
+
+# Membuat grouped bar chart
+ax = sns.barplot(
+    x='Metrik',
+    y='Skor',
+    hue='Metode',
+    data=df_melt,
+    palette=['#1D3557', '#E63946'],
+    edgecolor='black'
+)
+
+# Kustomisasi tampilan grafik
+plt.title('Perbandingan Performa Model:\nClass Weight (Balanced) vs SMOTE pada Data Uji',
+          fontsize=14, fontweight='bold', pad=15)
+plt.xlabel('Metrik Evaluasi', fontsize=12)
+plt.ylabel('Skor (0.0 - 1.0)', fontsize=12)
+plt.ylim(0, 1.15) # Memberikan ruang kosong di atas agar teks angka tidak terpotong
+plt.legend(title='Metode Penanganan', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+# Menambahkan anotasi/angka nilai skor di atas masing-masing batang (bar)
+for p in ax.patches:
+    ax.annotate(f"{p.get_height():.3f}",
+                (p.get_x() + p.get_width() / 2., p.get_height()),
+                ha='center', va='bottom', fontsize=11, xytext=(0, 5),
+                textcoords='offset points')
+
+plt.tight_layout()
+plt.show()
+
+# ==========================================
+# 1. MENGHITUNG CONFUSION MATRIX
+# ==========================================
+cm_balanced = confusion_matrix(y_test, y_pred_balanced)
+cm_smote = confusion_matrix(y_test, y_pred_smote)
+
+labels = sorted(y_test.unique())
+
+# ==========================================
+# 2. MENAMPILKAN TABEL TEKS BERWARNA (TERMINAL)
+# ==========================================
+def buat_tabel_cm_warna(cm, label_names, nama_metode, kode_warna):
+    RESET = '\033[0m' # Kode untuk mereset warna kembali ke standar
+    df_cm = pd.DataFrame(cm, index=[f"Aktual: {l}" for l in label_names],
+                         columns=[f"Prediksi: {l}" for l in label_names])
+
+    # Mencetak output dengan warna yang telah ditentukan
+    print(f"\n{kode_warna}[{nama_metode}] CONFUSION MATRIX")
+    print("-" * 45)
+    print(df_cm.to_markdown(tablefmt="grid"))
+    print("-" * 45 + RESET)
+
+print("\n" + "="*50)
+print(" 📊 LAPORAN CONFUSION MATRIX")
+print("="*50)
+
+# Memberikan warna Biru terang (\033[94m) untuk Balanced
+buat_tabel_cm_warna(cm_balanced, labels, "CLASS WEIGHT = BALANCED", '\033[94m')
+
+# Memberikan warna Hijau terang (\033[92m) untuk SMOTE
+buat_tabel_cm_warna(cm_smote, labels, "METODE SMOTE", '\033[92m')
+
+
+# ==========================================
+# 3. VISUALISASI HEATMAP BERSEBELAHAN (WARNA BEDA)
+# ==========================================
+sns.set_theme(style="white")
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+fig.suptitle('Perbandingan Confusion Matrix: Balanced vs SMOTE',
+             fontsize=16, fontweight='bold', y=1.05)
+
+annot_kws = {"size": 14, "weight": "bold"}
+
+# --- Heatmap 1: Balanced (WARNA BIRU) ---
+sns.heatmap(cm_balanced, annot=True, fmt='d', cmap='Blues', ax=axes[0],
+            cbar=False, annot_kws=annot_kws,
+            xticklabels=labels, yticklabels=labels,
+            linecolor='black', linewidths=1)
+axes[0].set_title('Model 1: Class Weight (Balanced)', fontsize=14, pad=15, color='#1D3557')
+axes[0].set_xlabel('Label Prediksi', fontsize=12, fontweight='bold')
+axes[0].set_ylabel('Label Aktual', fontsize=12, fontweight='bold')
+
+# --- Heatmap 2: SMOTE (WARNA HIJAU) ---
+sns.heatmap(cm_smote, annot=True, fmt='d', cmap='Greens', ax=axes[1],
+            cbar=True, annot_kws=annot_kws,
+            xticklabels=labels, yticklabels=labels,
+            linecolor='black', linewidths=1)
+axes[1].set_title('Model 2: SMOTE', fontsize=14, pad=15, color='#2A9D8F')
+axes[1].set_xlabel('Label Prediksi', fontsize=12, fontweight='bold')
+axes[1].set_ylabel('Label Aktual', fontsize=12, fontweight='bold')
+
+plt.tight_layout()
+plt.show()
+
+# ==========================================
+# 1. EKSTRAKSI FEATURE IMPORTANCE
+# ==========================================
+# Mengambil nama fitur dari data latih
+nama_fitur = X_train.columns
+
+# Mengekstrak nilai feature importance dari masing-masing model
+importance_balanced = rf_model.feature_importances_
+importance_smote = rf_model_smote.feature_importances_
+
+# Membuat DataFrame untuk menggabungkan hasilnya
+df_importance = pd.DataFrame({
+    'Fitur': nama_fitur,
+    'Balanced': importance_balanced,
+    'SMOTE': importance_smote
+})
+
+# Menambahkan kolom 'Rata-rata' khusus untuk mengurutkan (sorting) fitur dari yang paling penting
+df_importance['Rata-rata'] = (df_importance['Balanced'] + df_importance['SMOTE']) / 2
+df_importance = df_importance.sort_values(by='Rata-rata', ascending=False).drop(columns=['Rata-rata'])
+
+# ==========================================
+# 2. MENAMPILKAN TABEL TEKS BERWARNA (TERMINAL)
+# ==========================================
+RESET = '\033[0m'
+WARNA_JUDUL = '\033[95m' # Warna ungu muda untuk judul laporan
+
+print("\n" + "="*70)
+print(f"{WARNA_JUDUL} 📊 LAPORAN FEATURE IMPORTANCE (BALANCED VS SMOTE){RESET}")
+print("="*70)
+# Membulatkan nilai desimal ke 4 angka di belakang koma agar tabel rapi
+print(df_importance.round(4).to_markdown(index=False, tablefmt="grid"))
+print("="*70 + "\n")
+
+
+# ==========================================
+# 3. VISUALISASI GRAFIK BAR HORIZONTAL
+# ==========================================
+# Mengubah format data (melt) agar sesuai dengan parameter 'hue' di Seaborn
+df_melt_imp = df_importance.melt(id_vars='Fitur', var_name='Metode', value_name='Skor Kepentingan')
+
+sns.set_theme(style="whitegrid")
+# Ukuran grafik dibuat agak tinggi (10) agar nama fitur tidak berdempetan
+plt.figure(figsize=(12, 10))
+
+# Membuat Horizontal Grouped Bar Chart
+ax = sns.barplot(
+    x='Skor Kepentingan',
+    y='Fitur',
+    hue='Metode',
+    data=df_melt_imp,
+    palette=['#1D3557', '#2A9D8F'], # Biru Gelap (Balanced) & Hijau Teal (SMOTE)
+    edgecolor='black'
+)
+
+# Kustomisasi Tampilan Grafik
+plt.title('Perbandingan Feature Importance:\nClass Weight (Balanced) vs SMOTE',
+          fontsize=16, fontweight='bold', pad=20)
+plt.xlabel('Tingkat Kepentingan (0.0 - 1.0)', fontsize=13, fontweight='bold')
+plt.ylabel('Fitur / Variabel Prediktor', fontsize=13, fontweight='bold')
+plt.legend(title='Metode', title_fontsize='12', fontsize='11',
+           bbox_to_anchor=(1.05, 1), loc='upper left')
+
+# Menambahkan grid vertikal tipis untuk mempermudah pembacaan nilai skor
+plt.grid(axis='x', linestyle='--', alpha=0.7, zorder=0)
+
+plt.tight_layout()
+plt.show()
